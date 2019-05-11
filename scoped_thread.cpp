@@ -1,6 +1,8 @@
 #include <thread>
 #include <vector>
 #include <iostream>
+#include <numeric>
+#include <algorithm>
 #include <atomic>
 #include <queue>
 #include <condition_variable>
@@ -158,13 +160,46 @@ private:
 };
 	
 int main() {
-	ThreadPool p {4};
+	constexpr int thread_count {1};
 
-	future<int> f1 {p.AddTask([]{ return 4; })};
-	future<string> f2 {p.AddTask([]{ return "ahoj"s; })};
-	future<unique_ptr<double>> f3 {p.AddTask([]{ return make_unique<double>(5); })};
+	ThreadPool p {thread_count};
 
-	cout << f1.get() << '\n';
-	cout << f2.get() << '\n';
-	cout << *f3.get() << '\n';
+	constexpr int max {20'000'000};
+
+	vector<int> v;
+	v.reserve(max);
+	for (int i {0}; i != max; ++i) v.emplace_back(1);
+
+	vector<future<bool>> futures(thread_count);
+
+		steady_clock::time_point begin[thread_count];
+		steady_clock::time_point end[thread_count];
+	{
+		int step {max / thread_count};
+
+		cout << step << '\n';
+
+		for (int i {0}; i != thread_count; ++i) {
+			cout << "Low: " << i*step << '\n';
+			cout << "High: " << i*step+step << '\n';
+			futures[i] = p.AddTask([&v, i, step, &begin, &end]{ 
+									begin[i] = steady_clock::now(); 
+									auto j {i*step};
+									auto res {find(next(v.cbegin(),j), next(v.cbegin(), j+step), 4)}; 
+									end[i] = steady_clock::now();
+									return res != v.cend();
+								});
+		}
+	}
+
+	int res {0};
+
+	for (auto& f : futures) res += f.get();
+
+	cout << "Result: " << res << '\n';
+
+	for (int i {0}; i != thread_count; ++i) {
+		cout << "Time " << i << ": " << duration_cast<milliseconds>(end[i]-begin[i]).count() << " ms\n";
+	}
+
 }
