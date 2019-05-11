@@ -4,6 +4,7 @@
 #include <vector>
 #include <iostream>
 #include <atomic>
+#include <list>
 #include <queue>
 #include <condition_variable>
 #include <chrono>
@@ -74,13 +75,12 @@ public:
 		}
 		return false;
 	}
+
 private:
 	mutex _mutex;
 	condition_variable _cv;
 	queue<value_type> _queue;
 };
-
-// TODO: Synced queue
 
 class ThreadPool {
 public:
@@ -97,37 +97,37 @@ public:
 
 	template<typename F>
 	future<void> AddTask(F fun) { 
-		packaged_task<void()> pt {fun};
-		future<void> fut {pt.get_future()};
-		_queue.Push(move(pt)); 
+		packaged_task<void()> task {fun};
+		future<void> fut {task.get_future()};
+		_queue.Push(move(task)); 
 		return fut;
 	}
+
 private:
-	void Run() try {
+
+	void Run() {
 		while (!_done) {
-			packaged_task<void()> pt;
-			if (_queue.PopTimeOut(pt, 1s)) pt();
+			packaged_task<void()> task;
+			if (_queue.PopTimeOut(task, 1s)) task();
 		}
-	} catch (const exception& e) {
-		cerr << e.what() << '\n';
-	}
+	} 
 
 	atomic_bool _done {false};
-	vector<ScopedThread> _workers;
 	SyncedQueue<packaged_task<void()>> _queue;
+	// be careful with _workers destructor, if _queue is destructed before _workers are,
+	// than worker thread can wait with timeout on dangling function pointer of _queue
+	vector<ScopedThread> _workers;
 };
 
-void func() {
-	cout << 5 << '\n';
-}
 	
-int main() try {
+int main() {
 	ThreadPool p {4};
 
+	vector<future<void>> v;
+
 	for (int i {0}; i != 10'000; ++i) {
-		p.AddTask(func);
+		v.emplace_back(p.AddTask([i]{ cout << i << '\n'; }));
 	}
 
-} catch (const exception& e) {
-	cerr << e.what() << '\n';
+	for (auto& f : v) f.wait();
 }
