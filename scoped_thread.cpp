@@ -20,7 +20,6 @@ public:
 		: _thread{forward<F>(f), forward<Args>(args)...} {}
 		
 	ScopedThread() = default;
-
 	ScopedThread(ScopedThread&&) = default;
 
 	ScopedThread& operator=(ScopedThread&& t) {
@@ -66,9 +65,18 @@ public:
 		_queue.pop();
 	}
 
-	bool PopTimeOut(value_type& v, milliseconds ms) {
+	bool TryPop(value_type& v) {
+		scoped_lock l {_mutex};
+		if (_queue.empty()) return false;
+		v = move(_queue.front());
+		_queue.pop();
+		return true;
+	}
+
+	bool PopTimeOut(value_type& v, steady_clock::duration d) {
 		unique_lock l {_mutex};
-		if (_cv.wait_for(l, ms, [this]{ return !_queue.empty(); })) {
+		bool notEmpty {_cv.wait_for(l, d, [this]{ return !_queue.empty(); })};
+		if (notEmpty) {
 			v = move(_queue.front());
 			_queue.pop();
 			return true;
@@ -81,6 +89,7 @@ private:
 	condition_variable _cv;
 	queue<value_type> _queue;
 };
+
 
 class ThreadPool {
 public:
@@ -108,24 +117,25 @@ private:
 	void Run() {
 		while (!_done) {
 			packaged_task<void()> task;
-			if (_queue.PopTimeOut(task, 1s)) task();
+			if (_queue.TryPop(task)) {
+			   	task();
+			} else {
+				this_thread::yield();
+			}
 		}
 	} 
 
-	atomic_bool _done {false};
 	SyncedQueue<packaged_task<void()>> _queue;
-	// be careful with _workers destructor, if _queue is destructed before _workers are,
-	// than worker thread can wait with timeout on dangling function pointer of _queue
+	atomic_bool _done {false};
 	vector<ScopedThread> _workers;
 };
-
 	
 int main() {
 	ThreadPool p {4};
 
 	vector<future<void>> v;
 
-	for (int i {0}; i != 10'000; ++i) {
+	for (int i {0}; i != 1'000'000; ++i) {
 		v.emplace_back(p.AddTask([i]{ cout << i << '\n'; }));
 	}
 
