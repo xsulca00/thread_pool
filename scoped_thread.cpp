@@ -89,7 +89,7 @@ private:
 
 
 struct func_base {
-	virtual void operator()() = 0;
+	virtual void call() = 0;
 	// by removing virtual destructor, you will get a speedup
 	virtual ~func_base() {}
 };
@@ -97,12 +97,11 @@ struct func_base {
 template<typename F>
 class func : public func_base {
 public:
-	func(F&& ff) : f{move(ff)} {}
-	func(const F& ff) : f{move(ff)} {}
+	func(packaged_task<F()> ff) : f{move(ff)} {}
 
-	void operator()() override { f(); }
+	void call() override { f(); }
 private:
-	F f;
+	packaged_task<F()> f;
 };
 
 class function_wrapper {
@@ -110,17 +109,18 @@ public:
 	function_wrapper() = default;
 
 	template<typename F>
-	function_wrapper(F&& f) : ffunc{make_unique<func<F>>(forward<F>(f))} {}
+	function_wrapper(packaged_task<F()> f) : ffunc{ make_unique<func<F>>(move(f)) } {}
 
-	void operator()() { (*ffunc)(); }
+	void operator()() { ffunc->call(); }
 private:
 	unique_ptr<func_base> ffunc;
 };
 
-
 class ThreadPool {
 public:
 	ThreadPool(int count) try {
+		if (count <= 0) throw runtime_error{"ThreadPool::ThreadPool(): count <= 0"};
+
 		for (int i {0}; i != count; ++i) {
 			_workers.emplace_back([this]{ Run(); });
 		}
@@ -133,9 +133,8 @@ public:
 
 	template<typename F>
 	future<invoke_result_t<F>> AddTask(F&& fun) { 
-		using result = invoke_result_t<F>;
-		packaged_task<result()> task {forward<F>(fun)};
-		future<result> fut {task.get_future()};
+		packaged_task<invoke_result_t<F>()> task {forward<F>(fun)};
+		auto fut {task.get_future()};
 		_queue.Push(move(task)); 
 		return fut;
 	}
