@@ -1,10 +1,7 @@
 #include <thread>
-#include <unistd.h>
-#include <signal.h>
 #include <vector>
 #include <iostream>
 #include <atomic>
-#include <list>
 #include <queue>
 #include <condition_variable>
 #include <chrono>
@@ -91,6 +88,36 @@ private:
 };
 
 
+struct func_base {
+	virtual void operator()() = 0;
+	// by removing virtual destructor, you will get a speedup
+	virtual ~func_base() {}
+};
+
+template<typename F>
+class func : public func_base {
+public:
+	func(F&& ff) : f{move(ff)} {}
+	func(const F& ff) : f{move(ff)} {}
+
+	void operator()() override { f(); }
+private:
+	F f;
+};
+
+class function_wrapper {
+public:
+	function_wrapper() = default;
+
+	template<typename F>
+	function_wrapper(F&& f) : ffunc{make_unique<func<F>>(forward<F>(f))} {}
+
+	void operator()() { (*ffunc)(); }
+private:
+	unique_ptr<func_base> ffunc;
+};
+
+
 class ThreadPool {
 public:
 	ThreadPool(int count) try {
@@ -105,9 +132,10 @@ public:
 	~ThreadPool() { _done = true; }
 
 	template<typename F>
-	future<void> AddTask(F fun) { 
-		packaged_task<void()> task {fun};
-		future<void> fut {task.get_future()};
+	future<invoke_result_t<F>> AddTask(F&& fun) { 
+		using result = invoke_result_t<F>;
+		packaged_task<result()> task {forward<F>(fun)};
+		future<result> fut {task.get_future()};
 		_queue.Push(move(task)); 
 		return fut;
 	}
@@ -116,7 +144,7 @@ private:
 
 	void Run() {
 		while (!_done) {
-			packaged_task<void()> task;
+			function_wrapper task;
 			if (_queue.TryPop(task)) {
 			   	task();
 			} else {
@@ -125,7 +153,7 @@ private:
 		}
 	} 
 
-	SyncedQueue<packaged_task<void()>> _queue;
+	SyncedQueue<function_wrapper> _queue;
 	atomic_bool _done {false};
 	vector<ScopedThread> _workers;
 };
@@ -133,11 +161,11 @@ private:
 int main() {
 	ThreadPool p {4};
 
-	vector<future<void>> v;
+	future<int> f1 {p.AddTask([]{ return 4; })};
+	future<string> f2 {p.AddTask([]{ return "ahoj"s; })};
+	future<unique_ptr<double>> f3 {p.AddTask([]{ return make_unique<double>(5); })};
 
-	for (int i {0}; i != 1'000'000; ++i) {
-		v.emplace_back(p.AddTask([i]{ cout << i << '\n'; }));
-	}
-
-	for (auto& f : v) f.wait();
+	cout << f1.get() << '\n';
+	cout << f2.get() << '\n';
+	cout << *f3.get() << '\n';
 }
